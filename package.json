@@ -1,21 +1,13 @@
 {
-  "name": "cloudflare-workers-openapi",
-  "version": "0.0.1",
-  "private": true,
+  "name": "feedback-hub",
+  "version": "0.1.0",
+  "type": "module",
   "scripts": {
-    "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "start": "wrangler dev",
-    "cf-typegen": "wrangler types"
-  },
-  "dependencies": {
-    "chanfana": "^2.6.3",
-    "hono": "^4.6.20",
-    "zod": "^3.24.1"
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
-    "@types/node": "22.13.0",
-    "@types/service-worker-mock": "^2.0.4",
-    "wrangler": "^4.59.2"
+    "@cloudflare/workers-types": "^4.20250127.0",
+    "wrangler": "^3.87.2"
   }
 }
