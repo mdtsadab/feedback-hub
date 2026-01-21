@@ -1,7 +1,87 @@
+export interface Env {
+  AI: Ai;
+  FEEDBACK_WORKFLOW: Workflow;
+  DB: D1Database;
+}
+
+export { FeedbackWorkflow } from "./workflow";
+
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // =========================
+    // AI CHAT API
+    // =========================
+    if (url.pathname === "/api/chat" && request.method === "POST") {
+      const body = (await request.json()) as { message?: string };
+      const message = body.message;
+
+      if (!message) {
+        return Response.json({ error: "Message required" }, { status: 400 });
+      }
+
+      const result = await env.AI.run(
+        "@cf/meta/llama-3-8b-instruct",
+        {
+          messages: [
+            {
+              role: "system",
+              content:
+                "You analyze Cloudflare outage feedback and answer user questions."
+            },
+            { role: "user", content: message }
+          ],
+          max_tokens: 256
+        }
+      );
+
+      return Response.json({
+        success: true,
+        response: result.response ?? result
+      });
+    }
+
+    // =========================
+    // FEEDBACK WORKFLOW TRIGGER
+    // =========================
+    if (url.pathname === "/api/feedback" && request.method === "POST") {
+      const body = (await request.json()) as {
+        message?: string;
+        source?: string;
+        product?: string;
+      };
+
+      if (!body.message) {
+        return Response.json(
+          { error: "Feedback message required" },
+          { status: 400 }
+        );
+      }
+
+      const instance = await env.FEEDBACK_WORKFLOW.create({
+        params: {
+          message: body.message,
+          source: body.source,
+          product: body.product
+        }
+      });
+
+      const { results } = await env.DB.prepare(
+        "SELECT * FROM feedback ORDER BY created_at DESC"
+      ).all();
+
+      return Response.json({
+        success: true,
+        workflowId: instance.id
+      });
+    }
+
+    // =========================
+    // DEFAULT UI
+    // =========================
     return new Response(HTML_CONTENT, {
-      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+      headers: { "Content-Type": "text/html; charset=utf-8" }
     });
   }
 };
@@ -31,11 +111,64 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
     let activeTab = 'dashboard';
     let selectedProduct = 'all';
+    let chatMessages = [];
+    let isLoading = false;
 
     function getFiltered() {
       return selectedProduct === 'all' 
         ? feedbackData 
         : feedbackData.filter(f => f.product === selectedProduct);
+    }
+
+    async function sendChatMessage(userMessage) {
+      if (!userMessage.trim() || isLoading) return;
+
+      isLoading = true;
+      chatMessages.push({ role: 'user', content: userMessage });
+      
+      const chatInput = document.getElementById('chat-input');
+      if (chatInput) chatInput.value = '';
+
+      renderChatTab();
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: userMessage })
+        });
+
+        const data = await response.json();
+        
+        if (data.success) {
+          const aiResponse = data.response || data.message || 'No response received';
+          chatMessages.push({ role: 'assistant', content: String(aiResponse) });
+        } else {
+          chatMessages.push({ role: 'assistant', content: 'Error: ' + (data.error || 'Unknown error') });
+        }
+      } catch (error) {
+        chatMessages.push({ role: 'assistant', content: 'Error connecting to AI: ' + error.message });
+      }
+
+      isLoading = false;
+      renderChatTab();
+    }
+
+    function renderChatTab() {
+      const chatContainer = document.getElementById('chat-messages');
+      if (!chatContainer) return;
+
+      chatContainer.innerHTML = chatMessages.map(msg => \`
+        <div class="mb-4">
+          <div class="\${msg.role === 'user' ? 'text-right' : 'text-left'}">
+            <div class="\${msg.role === 'user' ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-900'} rounded-lg p-3 inline-block max-w-xs">
+              <p class="text-sm">\${msg.content}</p>
+            </div>
+          </div>
+        </div>
+      \`).join('');
+
+      chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
     function render() {
@@ -54,7 +187,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 </div>
                 <div>
                   <h1 class="text-3xl font-bold text-gray-900">Cloudflare Feedback Hub</h1>
-                  <p class="text-gray-600">Real-time feedback aggregation & analysis</p>
+                  <p class="text-gray-600">Real-time feedback aggregation & AI analysis</p>
                 </div>
               </div>
 
@@ -67,11 +200,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
               </div>
 
               <!-- Tabs -->
-              <div class="flex gap-4 border-t border-gray-300 pt-4">
-                <button onclick="setTab('dashboard')" class="px-4 py-2 font-medium \${activeTab === 'dashboard' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Dashboard</button>
-                <button onclick="setTab('feedback')" class="px-4 py-2 font-medium \${activeTab === 'feedback' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Feedback</button>
-                <button onclick="setTab('analysis')" class="px-4 py-2 font-medium \${activeTab === 'analysis' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Analysis</button>
-                <button onclick="setTab('workflow')" class="px-4 py-2 font-medium \${activeTab === 'workflow' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Workflow</button>
+              <div class="flex gap-4 border-t border-gray-300 pt-4 overflow-x-auto">
+                <button onclick="setTab('dashboard')" class="px-4 py-2 font-medium whitespace-nowrap \${activeTab === 'dashboard' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Dashboard</button>
+                <button onclick="setTab('feedback')" class="px-4 py-2 font-medium whitespace-nowrap \${activeTab === 'feedback' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Feedback</button>
+                <button onclick="setTab('analysis')" class="px-4 py-2 font-medium whitespace-nowrap \${activeTab === 'analysis' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Analysis</button>
+                <button onclick="setTab('workflow')" class="px-4 py-2 font-medium whitespace-nowrap \${activeTab === 'workflow' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">Workflow</button>
+                <button onclick="setTab('chat')" class="px-4 py-2 font-medium whitespace-nowrap \${activeTab === 'chat' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-600'} hover:text-gray-900">AI Chat</button>
               </div>
             </div>
           </div>
@@ -298,12 +432,42 @@ const HTML_CONTENT = `<!DOCTYPE html>
         \`;
       }
 
+      if (activeTab === 'chat') {
+        html += \`
+          <div class="bg-white rounded-lg p-6 border border-gray-300 flex flex-col h-96">
+            <h2 class="text-2xl font-bold mb-4">🤖 AI Chat Assistant</h2>
+            <p class="text-gray-600 text-sm mb-4">Ask questions about the feedback, insights, or analysis using Workers AI (Llama 3)</p>
+            
+            <div id="chat-messages" class="flex-1 overflow-y-auto mb-4 p-3 bg-gray-50 rounded-lg border border-gray-300">
+              \${chatMessages.length === 0 ? '<p class="text-gray-500 text-center py-8">Start a conversation...</p>' : ''}
+            </div>
+
+            <div class="flex gap-2">
+              <input 
+                id="chat-input" 
+                type="text" 
+                placeholder="Ask me about the feedback..." 
+                class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-orange-500"
+                onkeypress="if(event.key==='Enter') sendChatMessage(document.getElementById('chat-input').value)"
+              />
+              <button 
+                onclick="sendChatMessage(document.getElementById('chat-input').value)"
+                class="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 font-medium"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        \`;
+      }
+
       html += \`
           </div>
         </div>
       \`;
 
       document.getElementById('app').innerHTML = html;
+      if (activeTab === 'chat') renderChatTab();
     }
 
     function setTab(tab) {

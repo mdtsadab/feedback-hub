@@ -1,6 +1,29 @@
 {
   "name": "feedback-hub",
-  "type": "javascript",
   "main": "src/index.ts",
-  "compatibility_date": "2025-01-19"
+  "compatibility_date": "2025-01-19",
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "workflows": [
+    {
+      "name": "feedback-workflow",
+      "binding": "FEEDBACK_WORKFLOW",
+      "class_name": "FeedbackWorkflow"
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "feedback_db",
+      "database_id": "7ff2a204-b7cb-4ecf-b205-f279830bdd56"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
 }
